@@ -1,0 +1,126 @@
+# openenv.yaml — environment specification for AutoFactoryToDEnv
+#
+# This file documents the environment metadata, action/observation spaces,
+# tariff schedule, and machine definitions for interoperability with
+# OpenEnv-compatible tooling.
+
+name: AutoFactoryToDEnv
+version: "1.0.0"
+description: >
+  24-step (1 hour each) factory production scheduling environment.
+  Goal: meet 8000 parts/day while minimising electricity cost,
+  machine wear, and CO₂ emissions.
+
+server:
+  base_url: http://localhost:8000
+  endpoints:
+    reset: POST /reset
+    step:  POST /step
+
+episode:
+  steps: 24
+  step_duration_hours: 1
+  production_target_parts_per_day: 8000
+
+# -------------------------------------------------------------------
+# Action space
+# -------------------------------------------------------------------
+action_space:
+  type: MultiDiscrete
+  fields:
+    stamping:
+      values: [0, 1, 2]
+      description: "0=idle, 1=half-power, 2=full-power"
+    molding:
+      values: [0, 1, 2]
+      description: "0=idle, 1=half-power, 2=full-power"
+    cnc:
+      values: [0, 1, 2]
+      description: "0=idle, 1=half-power, 2=full-power"
+    compressor:
+      values: [0, 1]
+      description: "0=off, 1=on (boosts total production by +15%)"
+    welder:
+      values: [0, 1, 2]
+      description: "0=off, 1=full-power, 2=maintenance (restores health)"
+
+# -------------------------------------------------------------------
+# Observation space
+# -------------------------------------------------------------------
+observation_space:
+  hour:
+    type: int
+    range: [0, 23]
+    description: "Current hour of the day"
+  production_so_far:
+    type: float
+    range: [0, inf]
+    description: "Cumulative parts produced so far in this episode"
+  machine_health:
+    type: list[float]
+    length: 5
+    range: [0.0, 1.0]
+    order: [stamping, molding, cnc, compressor, welder]
+    description: "Per-machine health fraction (1.0 = perfect, 0.0 = broken)"
+  electricity_price:
+    type: float
+    unit: "$/MWh"
+    description: "Current time-of-day electricity tariff"
+
+# -------------------------------------------------------------------
+# Electricity tariffs ($/MWh, time-of-day)
+# -------------------------------------------------------------------
+tariffs:
+  night:
+    rate: 7.48
+    windows: ["00:00-05:00", "22:00-24:00"]
+  normal:
+    rate: 7.88
+    windows: ["05:00-06:00", "10:00-18:00"]
+  peak:
+    rate: 9.85
+    windows: ["06:00-10:00", "18:00-22:00"]
+
+# -------------------------------------------------------------------
+# Machine definitions
+# -------------------------------------------------------------------
+machines:
+  - name: stamping
+    base_output:  [0, 150, 300]   # parts/hr at [idle, half, full]
+    power_mwh:    [0.0, 0.4, 0.8]
+    health_loss:  [0.0, 0.005, 0.012]
+
+  - name: molding
+    base_output:  [0, 130, 260]
+    power_mwh:    [0.0, 0.35, 0.70]
+    health_loss:  [0.0, 0.005, 0.012]
+
+  - name: cnc
+    base_output:  [0, 110, 220]
+    power_mwh:    [0.0, 0.3, 0.60]
+    health_loss:  [0.0, 0.004, 0.010]
+
+  - name: compressor
+    role: booster
+    boost_factor: 1.15
+    power_mwh:    [0.0, 0.25]    # [off, on]
+    health_loss:  [0.0, 0.008]
+
+  - name: welder
+    base_output:  [0, 80, 0]     # maintenance produces no parts
+    power_mwh:    [0.0, 0.5, 0.1]
+    health_loss:  [0.0, 0.008, -0.020]   # negative = maintenance restores health
+
+# -------------------------------------------------------------------
+# Reward
+# -------------------------------------------------------------------
+reward:
+  description: >
+    Composite reward balancing production progress, electricity cost,
+    machine wear, and CO₂ emissions.
+  weights:
+    production: +0.50
+    cost:       -0.30
+    wear:       -0.10
+    co2:        -0.10
+  co2_intensity_kg_per_mwh: 0.4
