@@ -11,12 +11,15 @@ Endpoints
   POST /evaluate    → EvaluateResponse
 """
 
-from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
+import os
+import sys
+
+import uvicorn
+from fastapi import FastAPI, HTTPException
 
 # Adjust the import path when running via uvicorn from the project root:
 #   uvicorn server.app:app --reload
-import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from models import (
@@ -92,6 +95,8 @@ def step(action: StepAction) -> StepResponse:
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    obs_dict["hour"] = obs_dict["hour"] % 24
+
     return StepResponse(
         observation=Observation(**obs_dict),
         reward=reward,
@@ -145,3 +150,13 @@ def evaluate(req: EvaluateRequest) -> EvaluateResponse:
         raise HTTPException(status_code=400, detail=str(exc))
 
     return EvaluateResponse(**result)
+
+
+def main() -> None:
+    """Run the API server entrypoint used by OpenEnv validation."""
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("server.app:app", host="0.0.0.0", port=port)
+
+
+if __name__ == "__main__":
+    main()

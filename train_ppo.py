@@ -50,17 +50,19 @@ class AutoFactoryGymEnv(gym.Env):
 
     def __init__(
         self,
-        target:            int  = PRODUCTION_TARGET,
+        task:              str  = "medium",  # TASK 1
+        target:            int | None = None,
         enable_breakdowns: bool = True,
         production_noise:  bool = True,
     ):
         super().__init__()
         self.env = AutoFactoryToDEnv(
+            task               = task,
             target             = target,
             enable_breakdowns  = enable_breakdowns,
             production_noise   = production_noise,
         )
-        self._target = target
+        # Store initial target for reference, but _normalize_obs will use env.target_production
 
         # TASK 2 — action space [3,3,3,2,2]
         self.action_space = spaces.MultiDiscrete(self.ACTION_NVEC_TRAIN)
@@ -79,10 +81,12 @@ class AutoFactoryGymEnv(gym.Env):
         """All values mapped to [0, 1]."""
         tariff_range = self.TARIFF_MAX - self.TARIFF_MIN
         tariff_norm  = (obs_dict["electricity_price"] - self.TARIFF_MIN) / tariff_range
+        
+        target = self.env.target_production # TASK 3: dynamic target
 
         return np.array([
             obs_dict["hour"]             / 24.0,
-            obs_dict["production_so_far"] / self._target,
+            obs_dict["production_so_far"] / target,
             *obs_dict["machine_health"],               # already [0, 1]
             float(np.clip(tariff_norm, 0.0, 1.0)),
         ], dtype=np.float32)

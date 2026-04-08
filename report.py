@@ -69,7 +69,7 @@ def interpret_hour(
 # Report generator
 # ---------------------------------------------------------------------------
 
-def run_report(policy=None):
+def run_report(policy=None, task="medium"):
     """
     Run one full episode and print the hackathon-compliant report.
 
@@ -77,14 +77,19 @@ def run_report(policy=None):
     ----------
     policy : callable(obs_dict) -> list[int], optional
         Agent policy.  Defaults to a smart heuristic that avoids peak hours.
+    task : str
+        The task difficulty level ('easy', 'medium', 'hard').
     """
-    env = AutoFactoryToDEnv(enable_breakdowns=False)
+    env = AutoFactoryToDEnv(task=task, enable_breakdowns=(task != "easy"))
     obs, _ = env.reset()
+    target = env.target_production
 
     # Default smart heuristic policy
     def smart_policy(o):
         h = o["hour"]
-        if o["production_so_far"] >= 8_000:
+        # TASK 3: use dynamic target production
+        current_target = o.get("production_target", target)
+        if o["production_so_far"] >= current_target:
             return [0, 0, 0, 0, 0]           # idle after cap
         if is_peak_hour(h):
             return [1, 1, 1, 0, 1]           # half-power during peak
@@ -107,24 +112,30 @@ def run_report(policy=None):
     for step in range(24):
         hour = obs["hour"]
         band = tariff_band(hour)
-        tariff_inr = get_tariff(hour) * USD_TO_INR
+        # Use environment's tariff logic (respects Easy mode flat rate)
+        tariff_val = env._get_tariff(hour)
+        tariff_inr = tariff_val * USD_TO_INR
 
         action = policy(obs)
         obs, reward, terminated, truncated, info = env.step(*action)
         all_rewards.append(reward)
 
+        # Reflect the ACTUAL action (after task overrides)
+        actual_action = info.get("actual_action", action)
         prod_delta   = info["production_delta"]
+        # Use cost directly from environment to ensure consistency
         cost_inr     = info["cost_usd"] * USD_TO_INR
         cumulative_cost_inr += cost_inr
         prod_so_far  = obs["production_so_far"]
+        current_target = obs.get("production_target", target)
 
         machine_names = ["stamping", "molding", "cnc", "compressor", "welder"]
         machine_labels = [
-            machine_label(action[i], machine_names[i])
+            machine_label(actual_action[i], machine_names[i])
             for i in range(5)
         ]
 
-        decision = interpret_hour(hour, prod_delta, prod_so_far, action)
+        decision = interpret_hour(hour, prod_delta, prod_so_far, actual_action, target=current_target)
 
         # ----- per-hour block -----
         print(f"HOUR {hour:02d} | {band} | ₹{tariff_inr:.2f}/kWh")
@@ -141,15 +152,15 @@ def run_report(policy=None):
 
     # ----- final summary -----
     st = env.state()
-    final_score = compute_final_score(st)
-    target_met  = st["total_production"] >= 8_000
+    final_score = compute_final_score(st, target=st["production_target"])
+    target_met  = st["total_production"] >= st["production_target"]
 
     print(DIVIDER)
     print("📊 FINAL SUMMARY")
     print("=" * 16)
     print()
     print(f"Final Score:       {final_score:.2f}")
-    print(f"Final Production:  {st['total_production']:.2f}")
+    print(f"Final Production:  {st['total_production']:.2f} / {st['production_target']:.2f}")
     print(f"Final Cost:        ₹{cumulative_cost_inr:,.2f}")
     print(f"Final CO₂:         {st['total_co2']:.2f} kg")
     print(f"Avg Machine Health:{sum(st['machine_health'])/len(st['machine_health']):.2%}")
@@ -165,4 +176,8 @@ def run_report(policy=None):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    run_report()
+    # Check if a task mode was passed via CLI
+    task_mode = "medium"
+    if len(sys.argv) > 1:
+        task_mode = sys.argv[1]
+    run_report(task=task_mode)

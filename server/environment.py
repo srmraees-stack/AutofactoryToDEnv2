@@ -290,6 +290,7 @@ def compute_step_reward(
     hour:               int,
     is_terminal:        bool,
     production_so_far:  float,
+    production_target:  float = PRODUCTION_TARGET,  # TASK 3: dynamic target
     hours_over_cap:     int = 0,
 ) -> float:
     """
@@ -308,10 +309,9 @@ def compute_step_reward(
       −0.05  running full power during peak hours
       +0.10  reaching cumulative target (applied once per terminal)
     """
-    TARGET = PRODUCTION_TARGET
-
     # --- component scores (each independently in [0, 1]) ---
-    progress    = min(production_so_far / TARGET, 1.0)                       # 0→1
+    # TASK 3: use dynamic target production
+    progress    = min(production_so_far / production_target, 1.0)              # 0→1
     cost_norm   = min(cost / MAX_HOURLY_COST, 1.0)                           # 0→1 (bad=1)
     co2_norm    = min(co2 / MAX_HOURLY_CO2, 1.0)                             # 0→1 (bad=1)
     health_norm = sum(machine_health) / len(machine_health)                  # 0→1
@@ -325,7 +325,7 @@ def compute_step_reward(
 
     # --- penalties ---
     # Idle penalty: no production while target unmet wastes hours
-    if production_delta == 0.0 and production_so_far < TARGET:
+    if production_delta == 0.0 and production_so_far < production_target:
         reward -= 0.05
 
     # Peak penalty: running at full power during expensive peak hours
@@ -334,13 +334,13 @@ def compute_step_reward(
         reward -= 0.05
 
     # Smooth production enforcement: penalise if >20% ahead of schedule
-    # Expected: produce evenly across 24 hours (333 parts/hr)
-    expected_progress = (hour / 24.0) * TARGET
+    # Expected: produce evenly across 24 hours
+    expected_progress = (hour / 24.0) * production_target
     if expected_progress > 0 and production_so_far > expected_progress * 1.2:
         reward -= 0.05
 
     # --- terminal bonus ---
-    if is_terminal and production_so_far >= TARGET:
+    if is_terminal and production_so_far >= production_target:
         reward += 0.10
 
     return round(float(max(0.0, min(1.0, reward))), 6)
@@ -370,16 +370,44 @@ class AutoFactoryToDEnv:
 
     def __init__(
         self,
-        target:             int   = PRODUCTION_TARGET,
+        task:               str   = "medium",  # TASK 1: new task mode param
+        target:             int | None = None, # optional override
         fixed_tariff:       float | None = None,
         enable_breakdowns:  bool  = True,
         production_noise:   bool  = True,
     ) -> None:
-        # --- config (set once, used in step) ---
-        self.target:             int        = target
+        # --- TASK CONFIG (TASK 1 & 2) ---
+        self.task_mode = task.lower()
+        if self.task_mode == "easy":
+            self.target_production = 6000
+            self.breakdown_prob    = 0.0
+            self.use_time_of_day   = False
+        elif self.task_mode == "medium":
+            self.target_production = 8000
+            self.breakdown_prob    = 0.05
+            self.use_time_of_day   = True
+        elif self.task_mode == "hard":
+            self.target_production = 8000
+            self.breakdown_prob    = 0.10
+            self.use_time_of_day   = True
+        else:
+            raise ValueError(f"Unknown task mode: {task}. Choose easy, medium, or hard.")
+
+        # Override defaults if explicitly provided
+        if target is not None: self.target_production = target
+        
+        # TASK 4 & 6: Hard mode extras
+        self.rush_order_hour   = 12 if self.task_mode == "hard" else None
+        self.rush_order_extra  = 1500 if self.task_mode == "hard" else 0
+        self.maintenance_hours = [8, 18] if self.task_mode == "hard" else []
+
+        # --- remaining config ---
         self.fixed_tariff:       float | None = fixed_tariff
         self.enable_breakdowns:  bool       = enable_breakdowns
-        self.production_noise:   bool       = production_noise  # ±5% Gaussian noise
+        self.production_noise:   bool       = production_noise
+
+        # TASK 9 — print task mode at the top of output (Once per env)
+        print(f"TASK MODE: {self.task_mode.upper()}")
 
         # --- episode state ---
         self.hour:              int        = 0
@@ -402,16 +430,20 @@ class AutoFactoryToDEnv:
     # ------------------------------------------------------------------
 
     def _get_tariff(self, hour: int) -> float:
-        """Return tariff, respecting fixed_tariff config."""
+        """Return tariff, respecting fixed_tariff and task config."""
         if self.fixed_tariff is not None:
             return self.fixed_tariff
+        # TASK 7: flat rate for easy mode
+        if not self.use_time_of_day:
+            return 750.0
         return get_tariff(hour)
 
     def _breakdown_prob(self, health: float) -> float:
-        """Return breakdown probability, respecting enable_breakdowns config."""
+        """Return breakdown probability, respecting task config."""
+        # TASK 5: use task-specific breakdown prob
         if not self.enable_breakdowns:
             return 0.0
-        return breakdown_probability(health)
+        return self.breakdown_prob
 
     def _compute_production(
         self,
@@ -462,10 +494,16 @@ class AutoFactoryToDEnv:
 
     def reset(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Reset environment state and return initial observation."""
+        # TASK 8 — reset core state
         self.hour              = 0
         self.production_so_far = 0.0
-        self.machine_health    = [1.0] * 5
         self._terminated       = False
+        
+        # Reset task target (in case it was modified by rush order)
+        if self.task_mode == "hard":
+            self.target_production = 8000
+            
+        self.machine_health    = [1.0] * 5
 
         # Reset cumulative tracking
         self.total_cost        = 0.0
@@ -503,6 +541,16 @@ class AutoFactoryToDEnv:
         if self._terminated:
             raise RuntimeError("Episode is over. Call reset() first.")
 
+        # TASK 4 — Rush order logic (Hard mode)
+        if self.rush_order_hour is not None and self.hour == self.rush_order_hour:
+            self.target_production += self.rush_order_extra
+
+        # TASK 6 — Forced maintenance logic (Hard mode)
+        if self.maintenance_hours and self.hour in self.maintenance_hours:
+            # Override welding machine to maintenance mode (2) or off (0)?
+            # User snippet says action[-1] = 0, so we use 0 (off).
+            welder = 0
+
         # --- production (health-scaled, with stochastic breakdowns) ---
         # Use env-level config to control breakdowns
         production_delta, breakdown_flags = self._compute_production(
@@ -525,7 +573,7 @@ class AutoFactoryToDEnv:
         # --- Hard cap: once cumulative production >= target,
         #     zero out ALL step outputs so the agent is not rewarded
         #     for burning energy after the goal is complete.
-        if self.production_so_far >= self.target:
+        if self.production_so_far >= self.target_production:
             self.hours_over_cap += 1
             production_delta = 0.0   # no parts
             cost             = 0.0   # no cost charged (machine idling is free)
@@ -540,12 +588,12 @@ class AutoFactoryToDEnv:
                 self.peak_energy += power
 
             # Clamp partial step so we never exceed target
-            if self.production_so_far + production_delta > self.target:
-                production_delta = self.target - self.production_so_far
+            if self.production_so_far + production_delta > self.target_production:
+                production_delta = self.target_production - self.production_so_far
             self.production_so_far += production_delta
 
         # Guaranteed hard cap (defensive)
-        self.production_so_far = min(self.production_so_far, self.target)
+        self.production_so_far = min(self.production_so_far, self.target_production)
 
         self.machine_health = [
             max(0.0, min(1.0, h + d))
@@ -567,6 +615,7 @@ class AutoFactoryToDEnv:
             hour              = self.hour - 1,   # the hour we just acted in
             is_terminal       = terminated,
             production_so_far = self.production_so_far,
+            production_target = self.target_production, # TASK 3
             hours_over_cap    = self.hours_over_cap,
         )
 
@@ -576,12 +625,13 @@ class AutoFactoryToDEnv:
             "cost_usd":          round(cost, 4),
             "co2_kg":            round(co2, 4),
             "health_delta":      [round(d, 4) for d in health_delta],
+            "actual_action":     [stamping, molding, cnc, compressor, welder],
             "breakdown_events":  {
                 name: broke
                 for name, broke in zip(AutoFactoryToDEnv.MACHINE_NAMES, breakdown_flags)
                 if broke
             },
-            "target_met":        self.production_so_far >= self.target if terminated else None,
+            "target_met":        self.production_so_far >= self.target_production if terminated else None,
         }
 
         # TASK 4 — include final_score in info at episode end
@@ -614,6 +664,7 @@ class AutoFactoryToDEnv:
         return {
             "hour":              self.hour,
             "total_production":  round(self.production_so_far, 2),
+            "production_target": self.target_production, # TASK 3
             "machine_health":    [round(h, 4) for h in self.machine_health],
             "total_cost":        round(self.total_cost, 4),
             "total_co2":         round(self.total_co2, 4),
@@ -638,6 +689,7 @@ class AutoFactoryToDEnv:
         return {
             "hour":              self.hour,
             "production_so_far": round(self.production_so_far, 2),
+            "production_target": self.target_production, # TASK 3
             "machine_health":    [round(h, 4) for h in self.machine_health],
             "electricity_price": self._get_tariff(next_hour),
         }

@@ -19,7 +19,6 @@ from typing import List, Optional
 class StepAction(BaseModel):
     """
     MultiDiscrete action sent by the agent each hour.
-
     stamping  : 0=idle, 1=half, 2=full
     molding   : 0=idle, 1=half, 2=full
     cnc       : 0=idle, 1=half, 2=full
