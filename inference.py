@@ -1,145 +1,380 @@
-import os
-import json
 import asyncio
-import traceback
-from openai import AsyncOpenAI
+import io
+import json
+import os
+import textwrap
+from contextlib import redirect_stdout
+from typing import Any, List, Optional, Sequence, Tuple
 
-# Ensure fallback implementation if openenv is not provided in environment
+from openai import OpenAI
+
 try:
     from openenv import MyEnv, compute_score
 except ImportError:
-    # Dummy mock implementations to prevent syntax crashing during unexpected execution
+    from server.environment import AutoFactoryToDEnv, compute_score as _compute_score
+
     class MyEnv:
         @classmethod
         async def from_docker_image(cls, image_name: str):
-            raise NotImplementedError("MyEnv must be provided by the hackathon runner.")
-    
-    def compute_score(*args, **kwargs):
-        return 0.0
+            task_name = os.getenv("TASK_NAME", "medium").lower()
+            enable_breakdowns = task_name != "easy"
+            production_noise = task_name != "easy"
+            return cls(AutoFactoryToDEnv(
+                task=task_name,
+                enable_breakdowns=enable_breakdowns,
+                production_noise=production_noise,
+            ))
+
+        def __init__(self, env):
+            self._env = env
+
+        async def reset(self):
+            return self._env.reset()
+
+        async def step(self, action):
+            return self._env.step(*action)
+
+        async def state(self):
+            return self._env.state()
+
+        async def close(self):
+            close_fn = getattr(self._env, "close", None)
+            if callable(close_fn):
+                close_fn()
+
+    def compute_score(state):
+        return _compute_score(state)
 
 
-PROMPT_TEMPLATE = """
-You are controlling a factory to reach an 8000 production target over 24 hours.
-You must output an action for the 5 machines: [stamping, molding, cnc, compressor, welder].
-Valid discrete actions:
-- stamping, molding, cnc: 0(idle), 1(half), 2(full)
-- compressor: 0(off), 1(on)
-- welder: 0(off), 1(full), 2(maintenance to repair health)
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or os.getenv("IMAGE_NAME")
+TASK_NAME = os.getenv("TASK_NAME", "medium")
+BENCHMARK = os.getenv("BENCHMARK", "autofactory_tod")
+MAX_STEPS = 24
+TEMPERATURE = 0.0
+MAX_TOKENS = 120
 
-Observation Data:
-{obs}
+SYSTEM_PROMPT = textwrap.dedent(
+    """
+    You are controlling a factory production environment for 24 hourly steps.
+    Return exactly one JSON array with 5 integers:
+    [stamping, molding, cnc, compressor, welder]
 
-Output ONLY a JSON list of 5 integers. Example: [2, 2, 2, 1, 1]
-"""
+    Valid actions:
+    - stamping, molding, cnc: 0=idle, 1=half, 2=full
+    - compressor: 0=off, 1=on
+    - welder: 0=off, 1=full, 2=maintenance
 
-async def run_inference():
-    # 1. Safely read required environment variables
-    api_base_url = os.environ["API_BASE_URL"]
-    model_name   = os.environ["MODEL_NAME"]
-    hf_token     = os.environ["HF_TOKEN"]
-    image_name   = os.environ["IMAGE_NAME"]
-    
-    # Track final metrics
-    success = False
-    total_steps = 0
-    step_rewards = []
-    score = 0.0
-    
-    # Hackathon evaluation metrics mandate strict STDOUT formatting
-    print(f"[START] task=factory_scheduling env={image_name} model={model_name}")
-    
+    Objectives:
+    - reach the production target by the end of the day
+    - avoid expensive peak tariff hours when possible
+    - preserve machine health
+    - use welder maintenance when health is low
+
+    Respond with JSON only. Example: [2,2,2,1,1]
+    """
+).strip()
+
+
+def _sanitize_text(value: Any) -> str:
+    if value is None:
+        return "null"
+    return str(value).replace("\r", " ").replace("\n", " ").strip() or "null"
+
+
+def _suppress_stdout():
+    return redirect_stdout(io.StringIO())
+
+
+def _coerce_float(value: Any, default: float = 0.0) -> float:
     try:
-        # 2. Instantiate OpenAI Client
-        client = AsyncOpenAI(
-            base_url=api_base_url,
-            api_key=hf_token,  # Common pattern for proxy endpoints using HF token
-        )
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
-        # 3. Spin up evaluation environment
-        env = await MyEnv.from_docker_image(image_name)
-        obs, _ = await env.reset()
-        
-        done = False
-        while not done and total_steps < 24:
-            total_steps += 1
-            action = [1, 1, 1, 0, 1]  # Safe default fallback action
-            step_error = "none"
-            
-            # --- AGENT INFERENCE BLOCK ---
-            try:
-                response = await client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role": "system", "content": "You are a factory control policy."},
-                        {"role": "user", "content": PROMPT_TEMPLATE.format(obs=obs)}
-                    ],
-                    temperature=0.0
-                )
-                
-                content = response.choices[0].message.content.strip()
-                
-                # Extract array properly to avoid string hallucinations
-                start_i = content.find("[")
-                end_i = content.rfind("]")
-                if start_i != -1 and end_i != -1:
-                    parsed = json.loads(content[start_i:end_i+1])
-                    if isinstance(parsed, list) and len(parsed) == 5:
-                        action = [int(a) for a in parsed]
-                    else:
-                        step_error = "invalid_action_format"
-                else:
-                    step_error = "no_json_array_found"
-                    
-            except Exception as e:
-                step_error = f"llm_error_{type(e).__name__}"
-                
-            # --- ENVIRONMENT STEP BLOCK ---
-            try:
-                # Handle potential argument unpacking based on standard gym implementations
-                if hasattr(env, 'step') and callable(getattr(env, 'step')):
-                    obs, reward, terminated, truncated, info = await env.step(action)
-                    done = terminated or truncated
-                    step_rewards.append(reward)
-                else:
-                    raise RuntimeError("Environment step function invalid")
-                    
-                action_str = json.dumps(action, separators=(',', ':'))
-                print(f"[STEP] step={total_steps} action={action_str} reward={reward:.2f} done={str(done).lower()} error={step_error}")
-                
-            except Exception as e:
-                step_error = f"env_step_error_{type(e).__name__}"
-                step_rewards.append(0.0)
-                action_str = json.dumps(action, separators=(',', ':'))
-                print(f"[STEP] step={total_steps} action={action_str} reward=0.00 done=true error={step_error}")
-                done = True
-                
-        # --- SCORE COMPUTATION BLOCK ---
-        try:
-            # Check if compute_score is an environment method or an external function
-            if hasattr(env, 'compute_score') and callable(getattr(env, 'compute_score')):
-                score = await getattr(env, 'compute_score')()
-            elif hasattr(env, 'state') and callable(getattr(env, 'state')):
-                # In standard factory OpenEnv implementation
-                state = await env.state() if asyncio.iscoroutinefunction(env.state) else env.state()
-                score = compute_score(state)
-            else:
-                score = 0.0
-                
-            # Clamp to [0,1]
-            score = max(0.0, min(float(score), 1.0))
-            success = True
-            
-        except Exception as e:
-            pass
-            
-    except Exception as e:
-        # Catch unexpected global fatals (e.g., Docker crash) to ensure [END] is always printed
-        pass
-        
+
+def _as_dict(value: Any) -> dict:
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    as_dict = getattr(value, "dict", None)
+    if callable(as_dict):
+        dumped = as_dict()
+        return dumped if isinstance(dumped, dict) else {}
+    return {}
+
+
+def _normalize_task_name(task_name: str) -> str:
+    task = (task_name or "medium").strip().lower()
+    return task if task in {"easy", "medium", "hard"} else "medium"
+
+
+def _heuristic_action(observation: dict) -> List[int]:
+    hour = int(observation.get("hour", 0))
+    price = _coerce_float(observation.get("electricity_price"), 0.0)
+    production_so_far = _coerce_float(observation.get("production_so_far"), 0.0)
+    production_target = _coerce_float(observation.get("production_target"), 8000.0)
+    health = list(observation.get("machine_health", [1.0] * 5))
+    health += [1.0] * (5 - len(health))
+
+    if production_so_far >= production_target:
+        return [0, 0, 0, 0, 0]
+
+    welder_low = health[4] < 0.45
+    compressor_low = health[3] < 0.35
+    any_core_low = min(health[:3]) < 0.35
+    late_day = hour >= 18
+    peak_hour = price >= 9.85 - 1e-6
+
+    if welder_low and not late_day:
+        return [1, 1, 1, 0, 2]
+    if any_core_low and peak_hour:
+        return [1, 1, 1, 0, 0]
+    if compressor_low:
+        return [2, 2, 2, 0, 1]
+    if peak_hour:
+        return [1, 1, 1, 0, 1]
+    return [2, 2, 2, 1, 1]
+
+
+def _build_user_prompt(
+    step: int,
+    observation: dict,
+    last_reward: float,
+    rewards: Sequence[float],
+    last_error: Optional[str],
+) -> str:
+    recent_rewards = ",".join(f"{reward:.2f}" for reward in rewards[-5:]) if rewards else "none"
+    health = observation.get("machine_health", [])
+    return textwrap.dedent(
+        f"""
+        Step: {step}
+        Observation:
+        {json.dumps(observation, separators=(",", ":"), sort_keys=True)}
+
+        Recent rewards: {recent_rewards}
+        Last reward: {last_reward:.2f}
+        Last error: {_sanitize_text(last_error)}
+        Machine health summary: {health}
+
+        Choose the next 5-integer action array.
+        """
+    ).strip()
+
+
+def _extract_action_array(raw_text: str) -> Optional[List[int]]:
+    if not raw_text:
+        return None
+    text = raw_text.strip()
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return None
+    try:
+        parsed = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, list) or len(parsed) != 5:
+        return None
+    try:
+        action = [int(value) for value in parsed]
+    except (TypeError, ValueError):
+        return None
+    bounds = [(0, 2), (0, 2), (0, 2), (0, 1), (0, 2)]
+    for value, (lower, upper) in zip(action, bounds):
+        if value < lower or value > upper:
+            return None
+    return action
+
+
+def _get_model_action(
+    client: OpenAI,
+    step: int,
+    observation: dict,
+    last_reward: float,
+    rewards: Sequence[float],
+    last_error: Optional[str],
+) -> Tuple[List[int], Optional[str]]:
+    fallback_action = _heuristic_action(observation)
+    if not API_KEY:
+        return fallback_action, "missing_api_key"
+
+    prompt = _build_user_prompt(
+        step=step,
+        observation=observation,
+        last_reward=last_reward,
+        rewards=rewards,
+        last_error=last_error,
+    )
+
+    try:
+        completion = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
+        )
+        content = completion.choices[0].message.content or ""
+        action = _extract_action_array(content)
+        if action is None:
+            return fallback_action, "invalid_model_action"
+        return action, None
+    except Exception as exc:
+        return fallback_action, f"llm_error:{type(exc).__name__}"
+
+
+def _normalize_reset_result(result: Any) -> Tuple[dict, Any]:
+    if isinstance(result, tuple) and len(result) >= 2:
+        return _as_dict(result[0]), _as_dict(result[1])
+    observation = _as_dict(getattr(result, "observation", {}))
+    info = _as_dict(getattr(result, "info", {}))
+    return observation, info
+
+
+def _normalize_step_result(result: Any) -> Tuple[dict, float, bool, bool, dict]:
+    if isinstance(result, tuple) and len(result) >= 5:
+        observation, reward, terminated, truncated, info = result[:5]
+        return _as_dict(observation), _coerce_float(reward), bool(terminated), bool(truncated), _as_dict(info)
+
+    observation = _as_dict(getattr(result, "observation", {}))
+    reward = _coerce_float(getattr(result, "reward", 0.0))
+    terminated = bool(getattr(result, "terminated", getattr(result, "done", False)))
+    truncated = bool(getattr(result, "truncated", False))
+    info = _as_dict(getattr(result, "info", {}))
+    return observation, reward, terminated, truncated, info
+
+
+async def _safe_state(env: Any) -> dict:
+    state_fn = getattr(env, "state", None)
+    if not callable(state_fn):
+        return {}
+    with _suppress_stdout():
+        state = state_fn()
+        if asyncio.iscoroutine(state):
+            state = await state
+    return _as_dict(state)
+
+
+async def _safe_close(env: Any) -> None:
+    close_fn = getattr(env, "close", None)
+    if not callable(close_fn):
+        return
+    with _suppress_stdout():
+        result = close_fn()
+        if asyncio.iscoroutine(result):
+            await result
+
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={_sanitize_text(task)} env={_sanitize_text(env)} model={_sanitize_text(model)}", flush=True)
+
+
+def log_step(step: int, action: Sequence[int], reward: float, done: bool, error: Optional[str]) -> None:
+    action_str = json.dumps(list(action), separators=(",", ":"))
+    done_str = str(bool(done)).lower()
+    print(
+        f"[STEP] step={step} action={action_str} reward={reward:.2f} done={done_str} error={_sanitize_text(error)}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: Sequence[float]) -> None:
+    rewards_str = ",".join(f"{reward:.2f}" for reward in rewards)
+    print(
+        f"[END] success={str(bool(success)).lower()} steps={steps} score={score:.2f} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+async def main() -> None:
+    task_name = _normalize_task_name(TASK_NAME)
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY or "missing")
+
+    env = None
+    rewards: List[float] = []
+    steps_taken = 0
+    success = False
+    score = 0.0
+    last_reward = 0.0
+    last_error: Optional[str] = None
+
+    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
+
+    try:
+        if not LOCAL_IMAGE_NAME:
+            raise RuntimeError("missing_local_image_name")
+
+        with _suppress_stdout():
+            env = await MyEnv.from_docker_image(LOCAL_IMAGE_NAME)
+
+        with _suppress_stdout():
+            reset_result = await env.reset()
+        observation, _ = _normalize_reset_result(reset_result)
+
+        for step in range(1, MAX_STEPS + 1):
+            action, model_error = _get_model_action(
+                client=client,
+                step=step,
+                observation=observation,
+                last_reward=last_reward,
+                rewards=rewards,
+                last_error=last_error,
+            )
+
+            with _suppress_stdout():
+                step_result = await env.step(action)
+
+            observation, reward, terminated, truncated, info = _normalize_step_result(step_result)
+            done = terminated or truncated
+
+            rewards.append(reward)
+            steps_taken = step
+            last_reward = reward
+
+            raw_env_error = None
+            if isinstance(info, dict):
+                raw_env_error = info.get("last_action_error")
+            last_error = raw_env_error or model_error
+
+            log_step(
+                step=step,
+                action=action,
+                reward=reward,
+                done=done,
+                error=last_error,
+            )
+
+            if done:
+                break
+
+        state = await _safe_state(env) if env is not None else {}
+        if state:
+            score = _coerce_float(compute_score(state))
+        score = min(max(score, 0.0), 1.0)
+        success = steps_taken > 0 and last_error is None and 0.0 <= score <= 1.0
+
+    except Exception as exc:
+        last_error = _sanitize_text(exc)
+        if steps_taken == 0:
+            score = 0.0
+            success = False
+
     finally:
-        # 4. Mandatory completion log ensuring lowercase booleans and 2-decimal formatting
-        rewards_str = ",".join(f"{r:.2f}" for r in step_rewards)
-        print(f"[END] success={str(success).lower()} steps={total_steps} score={score:.2f} rewards={rewards_str}")
+        if env is not None:
+            try:
+                await _safe_close(env)
+            except Exception:
+                pass
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
 
 if __name__ == "__main__":
-    asyncio.run(run_inference())
+    asyncio.run(main())

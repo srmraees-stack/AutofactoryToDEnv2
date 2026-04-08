@@ -50,12 +50,133 @@ async def lifespan(app: FastAPI):
     env.reset()
     yield
 
+from fastapi.responses import HTMLResponse
+
 app = FastAPI(
     title="AutoFactoryToDEnv",
     description="RL environment server for factory production scheduling.",
     version="2.0.0",
     lifespan=lifespan,
 )
+
+@app.get("/", response_class=HTMLResponse, summary="Landing page")
+def root():
+    """Welcome page with links to documentation."""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>AutoFactory API | Home</title>
+        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+        <style>
+            :root {
+                --primary: #6366f1;
+                --primary-dark: #4f46e5;
+                --bg: #0f172a;
+                --card-bg: rgba(30, 41, 59, 0.7);
+                --text: #f8fafc;
+                --text-muted: #94a3b8;
+            }
+            body {
+                margin: 0;
+                font-family: 'Outfit', sans-serif;
+                background: radial-gradient(circle at top right, #1e293b, #0f172a);
+                color: var(--text);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+                overflow: hidden;
+            }
+            .container {
+                text-align: center;
+                background: var(--card-bg);
+                backdrop-filter: blur(12px);
+                padding: 3rem;
+                border-radius: 24px;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+                max-width: 500px;
+                animation: fadeIn 0.8s ease-out;
+            }
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(20px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            h1 {
+                font-size: 2.5rem;
+                margin-bottom: 0.5rem;
+                background: linear-gradient(135deg, #818cf8 0%, #c084fc 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            p {
+                color: var(--text-muted);
+                margin-bottom: 2rem;
+            }
+            .links {
+                display: grid;
+                gap: 1rem;
+            }
+            .btn {
+                display: block;
+                padding: 1rem;
+                background: var(--primary);
+                color: white;
+                text-decoration: none;
+                border-radius: 12px;
+                font-weight: 600;
+                transition: all 0.3s ease;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+            }
+            .btn:hover {
+                background: var(--primary-dark);
+                transform: translateY(-2px);
+                box-shadow: 0 10px 15px -3px rgba(99, 102, 241, 0.4);
+            }
+            .btn-secondary {
+                background: rgba(255, 255, 255, 0.05);
+                color: var(--text);
+            }
+            .btn-secondary:hover {
+                background: rgba(255, 255, 255, 0.1);
+            }
+            .status {
+                margin-top: 2rem;
+                font-size: 0.875rem;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 0.5rem;
+            }
+            .dot {
+                width: 8px;
+                height: 8px;
+                background: #10b981;
+                border-radius: 50%;
+                box-shadow: 0 0 10px #10b981;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>AutoFactory API</h1>
+            <p>Production Scheduling RL Environment</p>
+            <div class="links">
+                <a href="/docs" class="btn">Explore API Docs</a>
+                <a href="/tasks" class="btn btn-secondary">View Task Configurations</a>
+                <a href="/health" class="btn btn-secondary">System Health</a>
+            </div>
+            <div class="status">
+                <div class="dot"></div>
+                Server is active and running
+            </div>
+        </div>
+    </body>
+    </html>
+    """
 
 @app.get("/health", summary="Health check endpoint for deployments")
 def health() -> dict:
