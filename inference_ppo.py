@@ -32,7 +32,7 @@ from server.environment import (
 )
 from train_ppo import AutoFactoryGymEnv   # normalized [0,1] obs wrapper
 
-USD_TO_INR = 95.0
+# Environment returns tariffs and costs in INR; no USD anywhere.
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +134,7 @@ def run_ppo_inference(
     while not done:
         hour       = env.env.hour
         band       = tariff_band(hour)
-        tariff_inr = get_tariff(hour) * USD_TO_INR
+        tariff_inr = get_tariff(hour)
 
         # TASK 1 — PPO policy action (stochastic by default when deterministic=False)
         action, _ = model.predict(obs, deterministic=deterministic)
@@ -154,7 +154,7 @@ def run_ppo_inference(
         done = terminated or truncated
 
         prod_delta  = info["production_delta"]
-        cost_inr    = info["cost_usd"] * USD_TO_INR
+        cost_inr    = info.get("cost_inr", 0.0)
         cumulative_cost_inr += cost_inr
         prod_so_far = env.env.production_so_far
 

@@ -42,13 +42,15 @@ class Observation(BaseModel):
 
     hour            : current hour index (0–23)
     production_so_far: cumulative parts produced this episode
+    production_target: the total production goal for this episode
     machine_health  : health [0.0–1.0] for [stamping, molding, cnc, compressor, welder]
-    electricity_price: current tariff in $/MWh
+        electricity_price: current tariff in INR/MWh
     """
     hour:             int        = Field(..., ge=0, le=23)
     production_so_far: float     = Field(..., ge=0)
+    production_target: float     = Field(..., ge=0)
     machine_health:   List[float] = Field(..., min_length=5, max_length=5)
-    electricity_price: float     = Field(..., gt=0)
+    electricity_price: float     = Field(..., gt=0)  # tariff in INR/MWh
 
 
 # ---------------------------------------------------------------------------

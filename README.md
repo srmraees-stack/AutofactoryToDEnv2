@@ -4,17 +4,17 @@ A sophisticated **reinforcement learning environment** for factory production sc
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Environment Description](#environment-description)
-- [Motivation](#motivation)
-- [Action Space](#action-space)
-- [Observation Space](#observation-space)
-- [Task Descriptions](#task-descriptions)
-- [Setup & Installation](#setup--installation)
-- [Usage](#usage)
-- [Baseline Scores](#baseline-scores)
-- [API Reference](#api-reference)
-- [Examples](#examples)
+- [Overview]
+- [Environment Description]
+- [Motivation]
+- [Action Space]
+- [Observation Space]
+- [Task Descriptions]
+- [Setup & Installation]
+- [Usage]
+- [Baseline Scores]
+- [API Reference]
+- [Examples]
 
 ---
 
@@ -66,9 +66,9 @@ Dynamic pricing based on time-of-day:
 
 | Period | Hours | Rate |
 |--------|-------|------|
-| **Peak** | 6–10, 18–22 | $9.85/MWh |
-| **Normal** | 5–6, 10–18 | $7.88/MWh |
-| **Night** | 0–5, 22–24 | $7.48/MWh |
+| **Peak** | 6–10, 18–22 | ₹935.75/MWh |
+| **Normal** | 5–6, 10–18 | ₹748.60/MWh |
+| **Night** | 0–5, 22–24 | ₹710.60/MWh |
 
 **Strategy Implication:** Smart agents shift production to off-peak hours to save ~24% on electricity costs.
 
@@ -179,16 +179,16 @@ All observations are **normalized to [0, 1]** for stable training.
 | 4 | `cnc_health` | [0, 1] | CNC machine health |
 | 5 | `compressor_health` | [0, 1] | Compressor health |
 | 6 | `welder_health` | [0, 1] | Welder health |
-| 7 | `electricity_price_norm` | [0, 1] | Current tariff ($7.48–$9.85) normalized |
+| 7 | `electricity_price_norm` | [0, 1] | Current tariff (₹710.60–₹935.75) normalized |
 
 ### Example Observations
 
 ```python
 # Hour 6 (night → peak transition), half production, all machines healthy, peak tariff
-[0.25, 0.50, 1.0, 1.0, 1.0, 1.0, 1.0, 0.77]  # tariff_norm (9.85-7.48)/(9.85-7.48) = 1.0
+[0.25, 0.50, 1.0, 1.0, 1.0, 1.0, 1.0, 1.00]  # tariff_norm (₹935.75-₹710.60)/(₹935.75-₹710.60) = 1.0
 
 # Hour 14 (midday), 75% production, stamping degraded, normal tariff
-[0.58, 0.75, 0.85, 0.95, 0.90, 0.92, 0.88, 0.0]  # tariff_norm = (7.88-7.48)/(9.85-7.48) = 0.20
+[0.58, 0.75, 0.85, 0.95, 0.90, 0.92, 0.88, 0.17]  # tariff_norm = (₹748.60-₹710.60)/(₹935.75-₹710.60) ≈ 0.17
 ```
 
 ---
@@ -429,11 +429,11 @@ python inference.py
 
 **Scores by Task**:
 
-| Task | Score | Production | Cost (USD) | CO₂ (kg) | Breakdowns |
+| Task | Score | Production | Cost (INR) | CO₂ (kg) | Breakdowns |
 |------|-------|------------|-----------|----------|-----------|
-| **Easy** (6,000 target) | 0.81 | 6,000 | $89.22 | 12.4 | 0 |
-| **Medium** (8,000 target) | 0.62 | 8,012 | $112.50 | 15.8 | 2–3 |
-| **Hard** (10,000 target) | 0.41 | 9,850 | $148.60 | 20.1 | 5–7 |
+| **Easy** (6,000 target) | 0.81 | 6,000 | ₹8,475.90 | 12.4 | 0 |
+| **Medium** (8,000 target) | 0.62 | 8,012 | ₹10,687.50 | 15.8 | 2–3 |
+| **Hard** (10,000 target) | 0.41 | 9,850 | ₹14,117.00 | 20.1 | 5–7 |
 
 ### PPO Agent (Trained, 48,000 Steps)
 
@@ -446,11 +446,11 @@ python inference.py
 
 **Scores by Task**:
 
-| Task | Score | Production | Cost (USD) | CO₂ (kg) | Improvement vs. Heuristic |
+| Task | Score | Production | Cost (INR) | CO₂ (kg) | Improvement vs. Heuristic |
 |------|-------|------------|-----------|----------|--------------------------|
-| **Easy** | 0.87 | 6,000 | $78.10 | 10.9 | +7.4% |
-| **Medium** | 0.71 | 8,050 | $101.30 | 14.2 | +14.5% |
-| **Hard** | 0.52 | 10,010 | $131.80 | 18.3 | +26.8% |
+| **Easy** | 0.87 | 6,000 | ₹7,419.50 | 10.9 | +7.4% |
+| **Medium** | 0.71 | 8,050 | ₹9,623.50 | 14.2 | +14.5% |
+| **Hard** | 0.52 | 10,010 | ₹12,521.00 | 18.3 | +26.8% |
 
 **Key Learnings**:
 - PPO learns to predict breakdowns and proactively use compressor before health drops

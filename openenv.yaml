@@ -64,21 +64,22 @@ observation_space:
     description: "Per-machine health fraction (1.0 = perfect, 0.0 = broken)"
   electricity_price:
     type: float
-    unit: "$/MWh"
+    unit: "INR/MWh"
     description: "Current time-of-day electricity tariff"
 
 # -------------------------------------------------------------------
-# Electricity tariffs ($/MWh, time-of-day)
+# Electricity tariffs (INR/MWh, time-of-day)
+# Converted from USD using 1 USD = 95 INR
 # -------------------------------------------------------------------
 tariffs:
   night:
-    rate: 7.48
+    rate: 710.60
     windows: ["00:00-05:00", "22:00-24:00"]
   normal:
-    rate: 7.88
+    rate: 748.60
     windows: ["05:00-06:00", "10:00-18:00"]
   peak:
-    rate: 9.85
+    rate: 935.75
     windows: ["06:00-10:00", "18:00-22:00"]
 
 # -------------------------------------------------------------------
@@ -124,3 +125,26 @@ reward:
     wear:       -0.10
     co2:        -0.10
   co2_intensity_kg_per_mwh: 0.4
+
+# -------------------------------------------------------------------
+# Tasks & Graders
+# -------------------------------------------------------------------
+tasks:
+  - id: easy
+    name: "Easy: Basic Scheduling"
+    description: "Meet a 6,000 part target with no breakdowns and fixed tariffs."
+    grader:
+      type: reward
+      threshold: 0.8
+  - id: medium
+    name: "Medium: Standard Production"
+    description: "8,000 part target with standard breakdowns and time-of-day tariffs."
+    grader:
+      type: reward
+      threshold: 0.6
+  - id: hard
+    name: "Hard: Peak Optimization"
+    description: "8,000 part base target with rush orders (+1500), breakdowns, and forced maintenance."
+    grader:
+      type: reward
+      threshold: 0.4

@@ -1,9 +1,5 @@
 """
-report.py — Human-readable RL Agent Report for AutoFactoryToDEnv.
-
-Generates EXACTLY the report format required by the hackathon spec.
-
-Usage
+report.py — RL Agent Report for AutoFactoryToDEnv.
 -----
   python3 report.py
 """
@@ -13,8 +9,6 @@ from server.environment import (
     AutoFactoryToDEnv, compute_final_score, is_peak_hour, get_tariff,
     TARIFF_NIGHT, TARIFF_NORMAL, TARIFF_PEAK,
 )
-
-USD_TO_INR = 95.0   # 1 USD = ₹95
 
 
 # ---------------------------------------------------------------------------
@@ -112,9 +106,8 @@ def run_report(policy=None, task="medium"):
     for step in range(24):
         hour = obs["hour"]
         band = tariff_band(hour)
-        # Use environment's tariff logic (respects Easy mode flat rate)
-        tariff_val = env._get_tariff(hour)
-        tariff_inr = tariff_val * USD_TO_INR
+        # Use environment's tariff logic (tariff is in INR/MWh)
+        tariff_inr = env._get_tariff(hour)
 
         action = policy(obs)
         obs, reward, terminated, truncated, info = env.step(*action)
@@ -123,8 +116,8 @@ def run_report(policy=None, task="medium"):
         # Reflect the ACTUAL action (after task overrides)
         actual_action = info.get("actual_action", action)
         prod_delta   = info["production_delta"]
-        # Use cost directly from environment to ensure consistency
-        cost_inr     = info["cost_usd"] * USD_TO_INR
+        # Use cost directly from environment (already INR)
+        cost_inr     = info["cost_inr"]
         cumulative_cost_inr += cost_inr
         prod_so_far  = obs["production_so_far"]
         current_target = obs.get("production_target", target)

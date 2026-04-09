@@ -52,10 +52,11 @@ MACHINE_OUTPUT = {
 COMPRESSOR_BOOST = 1.15        # +15% on total production when on
 WELDER_OUTPUT    = [0, 80, 0]  # idle / full / maintenance (no parts during maintenance)
 
-# Electricity tariffs ($/MWh)
-TARIFF_PEAK   = 9.85   # hours 6–10, 18–22
-TARIFF_NORMAL = 7.88   # hours 5–6,  10–18
-TARIFF_NIGHT  = 7.48   # hours 0–5,  22–24
+# Electricity tariffs (INR/MWh) — converted from USD using 1 USD = 95 INR
+# Original USD values: Peak=9.85, Normal=7.88, Night=7.48
+TARIFF_PEAK   = 9.85 * 95.0   # hours 6–10, 18–22  → INR/MWh
+TARIFF_NORMAL = 7.88 * 95.0   # hours 5–6,  10–18  → INR/MWh
+TARIFF_NIGHT  = 7.48 * 95.0   # hours 0–5,  22–24  → INR/MWh
 
 # Power draw (MWh) per machine per hour at each level
 #                            idle  half  full
@@ -92,7 +93,7 @@ W_TERMINAL   =  0.08   # end-of-episode bonus/shortfall penalty
 
 # Normalisation reference values  (approximate worst-case per step)
 MAX_HOURLY_PRODUCTION = 989.0   # all full + compressor  (780*1.15 + 80*1.15)
-MAX_HOURLY_COST       = 23.0    # all full at peak tariff (2.35 MWh * 9.85)
+MAX_HOURLY_COST       = 23.0 * 95.0    # all full at peak tariff (2.35 MWh * 9.85) → INR
 MAX_HOURLY_CO2        = 1.0     # 2.35 MWh * 0.4
 
 
@@ -228,7 +229,7 @@ def compute_cost(
     welder:     int,
     hour:       int,
 ) -> float:
-    """Return electricity cost ($) incurred in one hour."""
+    """Return electricity cost (INR) incurred in one hour."""
     power  = compute_total_power(stamping, molding, cnc, compressor, welder)
     tariff = get_tariff(hour)
     return power * tariff
@@ -622,7 +623,7 @@ class AutoFactoryToDEnv:
         obs  = self._build_observation()
         info = {
             "production_delta":  round(production_delta, 2),
-            "cost_usd":          round(cost, 4),
+            "cost_inr":          round(cost, 4),
             "co2_kg":            round(co2, 4),
             "health_delta":      [round(d, 4) for d in health_delta],
             "actual_action":     [stamping, molding, cnc, compressor, welder],
@@ -742,7 +743,7 @@ TASK_CONFIGS: Dict[str, Dict[str, Any]] = {
     "easy": {
         "description":        "Fixed tariff, no breakdowns, relaxed target.",
         "target":              7_000,
-        "fixed_tariff":        TARIFF_NORMAL,     # constant 7.88 $/MWh
+        "fixed_tariff":        TARIFF_NORMAL,     # constant 7.88 → converted to INR/MWh
         "enable_breakdowns":   False,
         "rush_order":          None,
         "forced_maintenance":  None,
