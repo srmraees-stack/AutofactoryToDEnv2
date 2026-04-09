@@ -5,5 +5,4 @@ venv/
 .venv/
 .DS_Store
 *.log
-*.zip
 ppo_factory_final/
