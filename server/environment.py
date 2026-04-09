@@ -131,7 +131,7 @@ def compute_total_power(
     cnc:        int,
     compressor: int,
     welder:     int,
-) -> float:
+ ) -> tuple[float, dict]:
     """Return total power draw (MWh) for all machines in one hour."""
     return (
         MACHINE_POWER["stamping"][stamping]
@@ -293,9 +293,13 @@ def compute_step_reward(
     production_so_far:  float,
     production_target:  float = PRODUCTION_TARGET,  # TASK 3: dynamic target
     hours_over_cap:     int = 0,
+    task:               str = "medium",
+    breakdown_flags:    List[bool] | None = None,
 ) -> float:
     """
     Hackathon-compliant step reward, strictly bounded in [0.0, 1.0].
+    Returns a tuple: `(reward, components)` where `components` is a
+    diagnostics dict containing per-term values useful for tuning.
 
     Weights
     -------
@@ -310,18 +314,46 @@ def compute_step_reward(
       −0.05  running full power during peak hours
       +0.10  reaching cumulative target (applied once per terminal)
     """
+    # Per-task reward overrides (tunable per difficulty)
+    REWARDS_DEFAULT = {
+        "w_prod": 0.40,
+        "w_prod_hourly": 0.10,
+        "w_cost": -0.20,
+        "w_wear": -0.05,
+        "w_co2": -0.05,
+        "breakdown_penalty": -0.75,
+        "terminal_bonus": 0.10,
+        "C_COST": 1000.0,
+        "C_WEAR": 10.0,
+    }
+
+    TASK_REWARD_OVERRIDES = {
+        "easy": {**REWARDS_DEFAULT, **{"w_prod": 0.50, "w_cost": -0.20, "breakdown_penalty": -0.5, "terminal_bonus": 0.10, "C_COST": 1000.0}},
+        "medium": {**REWARDS_DEFAULT, **{"w_prod": 0.45, "w_prod_hourly": 0.12, "w_cost": -0.25, "breakdown_penalty": -0.75, "terminal_bonus": 0.12, "C_COST": 1500.0}},
+        "hard": {**REWARDS_DEFAULT, **{"w_prod": 0.40, "w_prod_hourly": 0.15, "w_cost": -0.20, "w_wear": -0.10, "breakdown_penalty": -1.0, "terminal_bonus": 0.15, "C_COST": 2000.0, "C_WEAR": 12.0}},
+    }
+
+    cfg = TASK_REWARD_OVERRIDES.get(task, REWARDS_DEFAULT)
+
     # --- component scores (each independently in [0, 1]) ---
     # TASK 3: use dynamic target production
     progress    = min(production_so_far / production_target, 1.0)              # 0→1
-    cost_norm   = min(cost / MAX_HOURLY_COST, 1.0)                           # 0→1 (bad=1)
-    co2_norm    = min(co2 / MAX_HOURLY_CO2, 1.0)                             # 0→1 (bad=1)
+    # normalize cost and CO2 to tunable scales
+    cost_scaled = cost / float(cfg.get("C_COST", 1000.0))
+    co2_scaled  = min(co2 / MAX_HOURLY_CO2, 5.0)
     health_norm = sum(machine_health) / len(machine_health)                  # 0→1
 
+    # hourly shaping: reward production this hour relative to even pacing
+    hourly_target = max(1.0, production_target / float(TOTAL_HOURS))
+    hourly_ratio  = min(production_delta / hourly_target, 2.0)
+
     reward = (
-        0.40 * progress
-        + 0.20 * health_norm
-        + 0.20 * (1.0 - cost_norm)
-        + 0.20 * (1.0 - co2_norm)
+        cfg["w_prod"] * progress
+        + cfg.get("w_prod_hourly", 0.0) * hourly_ratio
+        + cfg.get("w_cost", -0.20) * (-cost_scaled)
+        + cfg.get("w_wear", -0.05) * (-sum(max(-d, 0.0) for d in health_delta) * cfg.get("C_WEAR", 10.0))
+        + cfg.get("w_co2", -0.05) * (-co2_scaled)
+        + 0.0
     )
 
     # --- penalties ---
@@ -330,25 +362,51 @@ def compute_step_reward(
         reward -= 0.05
 
     # Peak penalty: running at full power during expensive peak hours
-    all_full = (cost_norm > 0.85)   # proxy for "high power" action
-    if is_peak_hour(hour) and all_full:
+    if is_peak_hour(hour) and cost > (0.85 * MAX_HOURLY_COST):
         reward -= 0.05
 
     # Smooth production enforcement: penalise if >20% ahead of schedule
-    # Expected: produce evenly across 24 hours
-    expected_progress = (hour / 24.0) * production_target
+    expected_progress = (hour / float(TOTAL_HOURS)) * production_target
     if expected_progress > 0 and production_so_far > expected_progress * 1.2:
         reward -= 0.05
 
+    # Breakdown penalties (stronger on hard tasks)
+    n_breaks = 0
+    if breakdown_flags:
+        n_breaks = sum(1 for b in breakdown_flags if b)
+        reward += cfg.get("breakdown_penalty", -0.75) * n_breaks
+
+    # Maintenance bonus: if health increased this step (e.g., welder maintenance)
+    health_gain = sum(d for d in health_delta if d > 0)
+    if health_gain > 0:
+        reward += 0.5 * min(1.0, health_gain * 10.0)
+
     # --- terminal bonus ---
     if is_terminal and production_so_far >= production_target:
-        reward += 0.10
+        reward += cfg.get("terminal_bonus", 0.10)
 
-    return round(float(max(0.0, min(1.0, reward))), 6)
+    # --- diagnostics ---
+    components = {
+        "progress": round(progress, 6),
+        "hourly_ratio": round(hourly_ratio, 6),
+        "cost_scaled": round(cost_scaled, 6),
+        "co2_scaled": round(co2_scaled, 6),
+        "health_norm": round(health_norm, 6),
+        "n_breaks": int(n_breaks),
+        "health_gain": round(health_gain, 6),
+    }
+
+    final_reward = round(float(max(0.0, min(1.0, reward))), 6)
+    return final_reward, components
 
 
-# Keep the old name as an alias so existing callers don't break.
-compute_reward = compute_step_reward
+# Keep the old name as a compatibility wrapper returning only the scalar reward.
+def compute_reward(*args, **kwargs):
+    """Compatibility wrapper around compute_step_reward that returns scalar reward."""
+    result = compute_step_reward(*args, **kwargs)
+    if isinstance(result, tuple):
+        return result[0]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -607,7 +665,7 @@ class AutoFactoryToDEnv:
         self._terminated = terminated
 
         # --- reward (computed AFTER state update so reward sees new health) ---
-        reward = compute_step_reward(
+        reward, reward_components = compute_step_reward(
             production_delta  = production_delta,
             cost              = cost,
             health_delta      = health_delta,
@@ -618,6 +676,8 @@ class AutoFactoryToDEnv:
             production_so_far = self.production_so_far,
             production_target = self.target_production, # TASK 3
             hours_over_cap    = self.hours_over_cap,
+            task              = self.task_mode,
+            breakdown_flags   = breakdown_flags,
         )
 
         obs  = self._build_observation()
@@ -634,6 +694,9 @@ class AutoFactoryToDEnv:
             },
             "target_met":        self.production_so_far >= self.target_production if terminated else None,
         }
+
+        # Attach reward diagnostics
+        info["reward_components"] = reward_components
 
         # TASK 4 — include final_score in info at episode end
         if terminated:

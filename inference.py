@@ -7,6 +7,11 @@ from contextlib import redirect_stdout
 from typing import Any, List, Optional, Sequence, Tuple
 
 from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load environment variables from .env file if it exists
+load_dotenv()
+
 
 try:
     from openenv import MyEnv, compute_score
@@ -49,7 +54,7 @@ except ImportError:
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
-LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or os.getenv("IMAGE_NAME")
+LOCAL_IMAGE_NAME = os.getenv("IMAGE_NAME", "auto-factory-env:latest")
 TASK_NAME = os.getenv("TASK_NAME", "medium")
 BENCHMARK = os.getenv("BENCHMARK", "autofactory_tod")
 MAX_STEPS = 24
