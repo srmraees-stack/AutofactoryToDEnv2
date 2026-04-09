@@ -1,22 +1,70 @@
 # openenv.yaml — environment specification for AutoFactoryToDEnv
-#
-# This file documents the environment metadata, action/observation spaces,
-# tariff schedule, and machine definitions for interoperability with
-# OpenEnv-compatible tooling.
 
 name: AutoFactoryToDEnv
 version: "1.0.0"
 description: >
   24-step (1 hour each) factory production scheduling environment.
   Goal: meet 8000 parts/day while minimising electricity cost,
-  machine wear, and CO₂ emissions.
+  machine wear, and CO2 emissions.
 
+author: "srmraees-stack"
+tags:
+  - openenv
+  - manufacturing
+  - task-oriented-dialogue
+
+# -------------------------------------------------------------------
+# Tasks & Graders  (required: minimum 3, each with a callable grader)
+# -------------------------------------------------------------------
+tasks:
+  - id: task_easy
+    name: "Simple Order Lookup"
+    description: >
+      Agent must retrieve a single order status from the factory system.
+      Difficulty: easy. Expected baseline score ≥ 0.5.
+    difficulty: easy
+    grader: "server.graders:grade_easy_task"
+    max_steps: 24
+    target_score: 0.7
+
+  - id: task_medium
+    name: "Multi-Step Production Query"
+    description: >
+      Agent must handle a multi-turn dialogue to resolve a production
+      scheduling conflict. Difficulty: medium. Requires conflict
+      identification and a correct resolution proposal.
+    difficulty: medium
+    grader: "server.graders:grade_medium_task"
+    max_steps: 24
+    target_score: 0.5
+
+  - id: task_hard
+    name: "Complex Supply Chain Resolution"
+    description: >
+      Agent must coordinate across inventory, scheduling, and logistics
+      to resolve a multi-constraint supply chain disruption.
+      Difficulty: hard. Frontier models expected to score ~0.3.
+    difficulty: hard
+    grader: "server.graders:grade_hard_task"
+    max_steps: 24
+    target_score: 0.3
+
+# -------------------------------------------------------------------
+# Server
+# -------------------------------------------------------------------
 server:
-  base_url: http://localhost:8000
+  base_url: http://localhost:7860
   endpoints:
-    reset: POST /reset
-    step:  POST /step
+    reset:  POST /reset
+    step:   POST /step
+    state:  GET  /state
+    tasks:  GET  /tasks
+    grade:  POST /grade/{task_id}
+    health: GET  /health
 
+# -------------------------------------------------------------------
+# Episode
+# -------------------------------------------------------------------
 episode:
   steps: 24
   step_duration_hours: 1
@@ -61,15 +109,17 @@ observation_space:
     length: 5
     range: [0.0, 1.0]
     order: [stamping, molding, cnc, compressor, welder]
-    description: "Per-machine health fraction (1.0 = perfect, 0.0 = broken)"
+    description: "Per-machine health fraction (1.0=perfect, 0.0=broken)"
   electricity_price:
     type: float
     unit: "INR/MWh"
     description: "Current time-of-day electricity tariff"
+  production_target:
+    type: float
+    description: "Total parts required to complete the episode"
 
 # -------------------------------------------------------------------
-# Electricity tariffs (INR/MWh, time-of-day)
-# Converted from USD using 1 USD = 95 INR
+# Tariffs (INR/MWh, time-of-day)
 # -------------------------------------------------------------------
 tariffs:
   night:
@@ -87,7 +137,7 @@ tariffs:
 # -------------------------------------------------------------------
 machines:
   - name: stamping
-    base_output:  [0, 150, 300]   # parts/hr at [idle, half, full]
+    base_output:  [0, 150, 300]
     power_mwh:    [0.0, 0.4, 0.8]
     health_loss:  [0.0, 0.005, 0.012]
 
@@ -104,47 +154,24 @@ machines:
   - name: compressor
     role: booster
     boost_factor: 1.15
-    power_mwh:    [0.0, 0.25]    # [off, on]
+    power_mwh:    [0.0, 0.25]
     health_loss:  [0.0, 0.008]
 
   - name: welder
-    base_output:  [0, 80, 0]     # maintenance produces no parts
+    base_output:  [0, 80, 0]
     power_mwh:    [0.0, 0.5, 0.1]
-    health_loss:  [0.0, 0.008, -0.020]   # negative = maintenance restores health
+    health_loss:  [0.0, 0.008, -0.020]
 
 # -------------------------------------------------------------------
-# Reward
+# Reward function
 # -------------------------------------------------------------------
 reward:
   description: >
     Composite reward balancing production progress, electricity cost,
-    machine wear, and CO₂ emissions.
+    machine wear, and CO2 emissions.
   weights:
     production: +0.50
     cost:       -0.30
     wear:       -0.10
     co2:        -0.10
   co2_intensity_kg_per_mwh: 0.4
-
-# -------------------------------------------------------------------
-# Tasks & Graders
-# -------------------------------------------------------------------
-tasks:
-  - id: easy
-    name: "Easy: Basic Scheduling"
-    description: "Meet a 6,000 part target with no breakdowns and fixed tariffs."
-    grader:
-      type: reward
-      threshold: 0.8
-  - id: medium
-    name: "Medium: Standard Production"
-    description: "8,000 part target with standard breakdowns and time-of-day tariffs."
-    grader:
-      type: reward
-      threshold: 0.6
-  - id: hard
-    name: "Hard: Peak Optimization"
-    description: "8,000 part base target with rush orders (+1500), breakdowns, and forced maintenance."
-    grader:
-      type: reward
-      threshold: 0.4
