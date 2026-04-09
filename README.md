@@ -1,3 +1,15 @@
+---
+title: AutoFactory ToD Environment
+emoji: ⚙️
+colorFrom: blue
+colorTo: green
+sdk: gradio
+sdk_version: "4.0.0"
+python_version: "3.10"
+app_file: app.py
+pinned: false
+---
+
 # AutoFactory Time-of-Day (ToD) Environment
 
 A sophisticated **reinforcement learning environment** for factory production scheduling with realistic constraints, dynamic pricing, and multi-objective optimization.
