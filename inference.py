@@ -78,39 +78,16 @@ SYSTEM_PROMPT = textwrap.dedent("""
 # ---------------------------------------------------------------------------
 
 def log_start(task_id: str, model: str) -> None:
-    print(
-        json.dumps({"type": "START", "task_id": task_id, "model": model}),
-        flush=True,
-    )
-
+    print(f"[START] task={task_id} model={model}", flush=True)
 
 def log_step(task_id: str, step: int, action: Any, reward: float, done: bool, error: Optional[str]) -> None:
-    print(
-        json.dumps({
-            "type":    "STEP",
-            "task_id": task_id,
-            "step":    step,
-            "action":  action,
-            "reward":  round(float(reward), 4),
-            "done":    bool(done),
-            "error":   error,
-        }),
-        flush=True,
-    )
-
+    line = f"[STEP] task={task_id} step={step} reward={round(float(reward), 4)} done={done}"
+    if error:
+        line += f" error={error}"
+    print(line, flush=True)
 
 def log_end(task_id: str, score: float, steps: int, success: bool) -> None:
-    print(
-        json.dumps({
-            "type":    "END",
-            "task_id": task_id,
-            "score":   round(float(score), 4),
-            "steps":   steps,
-            "success": bool(success),
-        }),
-        flush=True,
-    )
-
+    print(f"[END] task={task_id} score={round(float(score), 4)} steps={steps} success={success}", flush=True)
 
 # ---------------------------------------------------------------------------
 # Environment wrapper  (HTTP-based — no Docker dependency)
